@@ -1,11 +1,11 @@
 package core;
 
-import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -34,8 +34,8 @@ public abstract class Funnel<T, R> {
     private int expire = 1800;
 	// 使用funnel组件的服务名称
     private String serviceName = "";
-	// 运行相关的指标，QRY_CACHE代表查询缓存次数，CACHE_EXISTS代表命中缓存次数，QRY_DB代表查询库的次数
-    private static final int QRY_CACHE = 0, CACHE_EXISTS = 1, QRY_DB = 2;
+	// 运行相关的指标，QRY_CACHE代表查询缓存次数，QRY_DB代表查询库的次数
+    private static final int QRY_CACHE = 0, QRY_DB = 1;
     // 计数器，key代表使用funnel组件的服务名称，value数组代表该服务对应指标的数据
     private static Map<String, int[]> counter = new HashMap<String, int[]>();
     // 没有命中缓存的阈值
@@ -47,15 +47,15 @@ public abstract class Funnel<T, R> {
         if (counter.containsKey(serviceName)) {
             operIndex = counter.get(serviceName);
         } else {
-            operIndex = new int[3];
+            operIndex = new int[2];
             counter.put(serviceName, operIndex);
         }
-        if(step > -1 && step < 3){
+        if(step > -1 && step < 2){
             operIndex[step]++;
         }
         if (operIndex[QRY_DB] > QRY_DB_THRESHOLD) {
-            LOGGER.info("[Funnel]funnelName: {}, qryCache:{}, cacheExists:{}, qryDb:{}",
-            		serviceName, operIndex[QRY_CACHE], operIndex[CACHE_EXISTS], operIndex[QRY_DB]);
+            LOGGER.info("[Funnel]serviceName: {}, qryCache:{}, qryDb:{}", 
+            		serviceName, operIndex[QRY_CACHE], operIndex[QRY_DB]);
             resetCounter();
         }
     }
@@ -98,49 +98,26 @@ public abstract class Funnel<T, R> {
 		build();
 	}
 	
+	private Optional<String> queryFromCache(String key) {
+        logCache(QRY_CACHE);
+        return getCacheTool().get(key);
+    }
+	
 	public R get(String key, T req, Class<R> type) {
-        R res = parseCache2Obj(queryFromCache(key), type);
-        if (res != null) {
-            logCache(CACHE_EXISTS);
-            return res;
-        }
-        return queryFromDB(key, req);
+		return queryFromCache(key).map(c -> parseCache2Obj(c, type)).orElseGet(() -> queryFromDB(key, req));
     }
 	
 	public R get(String key, T req, TypeReference<R> type) {
-        R res = parseCache2Obj(queryFromCache(key), type);
-        if (res != null) {
-            logCache(CACHE_EXISTS);
-            return res;
-        }
-        return queryFromDB(key, req);
+		return queryFromCache(key).map(c -> parseCache2Obj(c, type)).orElseGet(() -> queryFromDB(key, req));
     }
 	
-	private String queryFromCache(String key) {
-        logCache(QRY_CACHE);
-        return getCacheTool().get(key).orElse(null);
-    }
 	
 	private R parseCache2Obj(String value, Class<R> type) {
-        if (isNotEmpty(value)) {
-            try {
-                return JsonTool.fromJson(value, type);
-            } catch (IOException e) {
-                LOGGER.error("[Funnel]parseCache2Obj error: ", e);
-            }
-        }
-        return null;
+		return Optional.ofNullable(value).map(c -> JsonTool.fromJson(c, type)).orElse(null);
     }
 	
 	private R parseCache2Obj(String value, TypeReference<R> type) {
-        if (isNotEmpty(value)) {
-            try {
-                return JsonTool.fromJson(value, type);
-            } catch (IOException e) {
-                LOGGER.error("[Funnel]parseCache2Obj error: ", e);
-            }
-        }
-        return null;
+		return Optional.ofNullable(value).map(c -> JsonTool.fromJson(c, type)).orElse(null);
     }
 	
 	private R queryFromDB(String key, T req) {
@@ -176,7 +153,6 @@ public abstract class Funnel<T, R> {
 			res = cacheRecoverFunc.apply(cacheAware);
 		}
 		if (predicate != null && predicate.test(res)) {
-			logCache(CACHE_EXISTS);
 			return res;
 		}
 		if (querySyncFunc != null) {
@@ -218,33 +194,32 @@ public abstract class Funnel<T, R> {
 	}
 	
 	// 根据参数类型判断是否为null或空
-	private static boolean isEmpty(Object o) {
-		if (o == null) {
-			return true;
-		} else if (o instanceof String) {
-			String value = (String) o;
-			return value.trim().length() == 0;
-		} else if (o instanceof Collection) {
-			Collection c = (Collection) o;
-			return c.isEmpty();
-		} else if (o instanceof Map) {
-			Map map = (Map) o;
-			return map.isEmpty();
-		} else if (o.getClass().isArray()) {
-			Object[] arr = (Object[]) o;
-			return arr.length == 0;
-		}
-		return false;
+	private static boolean isNotEmpty(Object o) {
+		return Optional.ofNullable(o).filter(r -> {
+			if (r instanceof String) {
+				String value = (String) r;
+				return value.trim().length() > 0;
+			} else if (r instanceof Collection) {
+				Collection c = (Collection) r;
+				return !c.isEmpty();
+			} else if (r instanceof Map) {
+				Map map = (Map) r;
+				return !map.isEmpty();
+			} else if (r.getClass().isArray()) {
+				Object[] arr = (Object[]) r;
+				return arr.length > 0;
+			}
+			return false;
+		}).isPresent();
 	}
 	
-	private static boolean isNotEmpty(Object o) {
-		return !isEmpty(o);
+	private static boolean isEmpty(Object o) {
+		return !isNotEmpty(o);
 	}
 	
 	// 限制输出日志的长度，最大不能超过1000字符，如果超过，则显示IgnoreBigStr
 	public static String fmt(String info){
-        String res = "IgnoreBigStr";
-        return info != null && info.length() > 1000 ? res : info;
+		return Optional.ofNullable(info).filter(c -> c.length() <= 1000).orElse("IgnoreStr");
     }
 	
 }

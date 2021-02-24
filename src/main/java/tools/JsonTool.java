@@ -34,18 +34,24 @@ public class JsonTool {
         }
     	try {
 			json = objectMapper.writeValueAsString(obj);
-		} catch (JsonProcessingException e) {
-			throw new IllegalArgumentException(e);
-		}  
+		} catch (JsonProcessingException e) {}  
     	return json;
     }
     
-    public static <T> T fromJson(String jsonStr, Class<T> clazz) throws IOException {
-        return objectMapper.readValue(jsonStr, clazz);
+    public static <T> T fromJson(String json, Class<T> clazz) {
+        try {
+			objectMapper.readValue(json, clazz);
+		} catch (JsonProcessingException e) {
+		}
+        return null;
     }
     
-    public static <T> T fromJson(String jsonStr, TypeReference<T> typeReference) throws IOException {
-        return objectMapper.readValue(jsonStr,typeReference);
+    public static <T> T fromJson(String json, TypeReference<T> typeReference) {
+    	try {
+			objectMapper.readValue(json, typeReference);
+		} catch (JsonProcessingException e) {
+		}
+        return null;
     }
     
 }
